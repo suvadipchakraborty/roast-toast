@@ -4,6 +4,13 @@
 const CONFIG = {
   TINYFN_API_KEY: 'tf_live_BTlg7rGFNUJcL_kr968wSRX-grUPOHd9KiS1mAgITIQ',
   ROAST_URL: 'https://evilinsult.com/generate_insult.php?lang=en&type=json',
+  // Tried in order if the direct call is blocked (EvilInsult doesn't always send CORS headers)
+  ROAST_SOURCES: [
+    (u) => u,
+    (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+    (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  ],
+  ROAST_BACKUP_URL: 'https://insult.mattbas.org/api/insult.json', // last resort, different API
   TOAST_URL: 'https://api.tinyfn.io/v1/fun/compliment',
   SHARE_URL: 'https://roast-toast.suvadipchakraborty.workers.dev/',
 };
@@ -47,12 +54,28 @@ function setPhrase(text, fallback) {
 }
 
 /* ---------- Dual-API fetch engine ---------- */
+async function getJSON(url, ms = 8000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } finally { clearTimeout(timer); }
+}
+
 async function fetchRoast() {
-  const res = await fetch(CONFIG.ROAST_URL);
-  if (!res.ok) throw new Error('EvilInsult is down. Try again.');
-  const data = await res.json();
-  if (!data.insult) throw new Error('No insult came back. Try again.');
-  return decode(data.insult);
+  for (const wrap of CONFIG.ROAST_SOURCES) {
+    try {
+      const data = await getJSON(wrap(CONFIG.ROAST_URL));
+      if (data && data.insult) return decode(data.insult);
+    } catch (_) { /* try next source */ }
+  }
+  try {
+    const data = await getJSON(CONFIG.ROAST_BACKUP_URL);
+    if (data && data.insult) return decode(data.insult);
+  } catch (_) {}
+  throw new Error('Couldn’t reach the insult servers. Try again in a moment.');
 }
 
 async function fetchToast() {
